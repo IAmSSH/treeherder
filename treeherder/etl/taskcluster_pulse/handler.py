@@ -1,7 +1,6 @@
 # Code imported from https://github.com/taskcluster/taskcluster/blob/32629c562f8d6f5a6b608a3141a8ee2e0984619f/services/treeherder/src/handler.js
 import asyncio
 import logging
-import os
 
 import environ
 import jsonschema
@@ -264,11 +263,6 @@ async def handleTaskRerun(pushInfo, task, message):
     # reruns often have no logs, so in the interest of not linking to a 404'ing artifact,
     # don't include a link
     job["logs"] = []
-    job = await addArtifactUploadedLinks(
-        message["root_url"],
-        payload["status"]["taskId"],
-        payload["runId"]-1,
-        job)
     return job
 
 
@@ -289,11 +283,6 @@ async def handleTaskCompleted(pushInfo, task, message):
     job["logs"] = [
         createLogReference(message['root_url'], payload["status"]["taskId"], jobRun["runId"]),
     ]
-    job = await addArtifactUploadedLinks(
-        message["root_url"],
-        payload["status"]["taskId"],
-        payload["runId"],
-        job)
     return job
 
 
@@ -313,68 +302,5 @@ async def handleTaskException(pushInfo, task, message):
     # exceptions generally have no logs, so in the interest of not linking to a 404'ing artifact,
     # don't include a link
     job["logs"] = []
-    job = await addArtifactUploadedLinks(
-        message["root_url"],
-        payload["status"]["taskId"],
-        payload["runId"],
-        job)
     return job
-
-
-async def fetchArtifacts(root_url, taskId, runId):
-    asyncQueue = taskcluster.aio.Queue({"rootUrl": root_url}, session=session)
-    res = await asyncQueue.listArtifacts(taskId, runId)
-    artifacts = res["artifacts"]
-
-    continuationToken = res.get("continuationToken")
-    while continuationToken is not None:
-        continuation = {
-          "continuationToken": res["continuationToken"]
-        }
-
-        try:
-            res = await asyncQueue.listArtifacts(taskId, runId, continuation)
-        except Exception:
-            break
-
-        artifacts = artifacts.concat(res["artifacts"])
-        continuationToken = res.get("continuationToken")
-
-    return artifacts
-
-
-async def addArtifactUploadedLinks(root_url, taskId, runId, job):
-    artifacts = []
-    try:
-        artifacts = await fetchArtifacts(root_url, taskId, runId)
-    except Exception:
-        logger.debug("Artifacts could not be found for task: %s run: %s", taskId, runId)
-        return job
-
-    seen = {}
-    links = []
-    for artifact in artifacts:
-        name = os.path.basename(artifact["name"])
-        # Bug 1595902 - It seems that directories are showing up as artifacts; skip them
-        if not name:
-            continue
-        if not seen.get(name):
-            seen[name] = [artifact["name"]]
-        else:
-            seen[name].append(artifact["name"])
-            name = "{name} ({length})".format(name=name, length=len(seen[name])-1)
-
-        links.append({
-            "label": "artifact uploaded",
-            "linkText": name,
-            "url": taskcluster_urls.api(
-                root_url,
-                "queue",
-                "v1",
-                "task/{taskId}/runs/{runId}/artifacts/{artifact_name}".format(
-                    taskId=taskId, runId=runId, artifact_name=artifact["name"]
-                )),
-        })
-
-    job["jobInfo"]["links"] = links
-    return job
+    
